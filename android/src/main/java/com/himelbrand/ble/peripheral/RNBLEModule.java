@@ -22,6 +22,7 @@ import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.ParcelUuid;
+import android.support.annotation.Nullable;
 import android.support.v7.app.AppCompatActivity;
 import android.text.TextUtils;
 import android.util.Log;
@@ -52,14 +53,14 @@ import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.WritableArray;
-
-
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 /**
  * {@link NativeModule} that allows JS to open the default browser
  * for an url.
  */
-public class RNBLEModule extends ReactContextBaseJavaModule{
+public class RNBLEModule extends ReactContextBaseJavaModule {
+    private static final String LOG_TAG = "ReactNative";
 
     ReactApplicationContext reactContext;
     HashMap<String, BluetoothGattService> servicesMap;
@@ -85,8 +86,6 @@ public class RNBLEModule extends ReactContextBaseJavaModule{
         return "BLEPeripheral";
     }
 
-
-
     @ReactMethod
     public void addService(String uuid, Boolean primary) {
         UUID SERVICE_UUID = UUID.fromString(uuid);
@@ -103,25 +102,39 @@ public class RNBLEModule extends ReactContextBaseJavaModule{
         this.servicesMap.get(serviceUUID).addCharacteristic(tempChar);
     }
 
+    @ReactMethod
+    public void setValue(String serviceUUID, String charUUID, ReadableArray value) {
+        BluetoothGattCharacteristic characteristic = servicesMap.get(serviceUUID).getCharacteristic(UUID.fromString(charUUID));
+        setCharacteristicValue(characteristic, value);
+    }
+
     private final BluetoothGattServerCallback mGattServerCallback = new BluetoothGattServerCallback() {
         @Override
         public void onConnectionStateChange(BluetoothDevice device, final int status, int newState) {
-            super.onConnectionStateChange(device, status, newState);
+            Log.d(LOG_TAG, "RNBLEModule - onConnectionStateChange: " + status + " " + newState);
+
+            WritableMap event = Arguments.createMap();
+            event.putString("device", device.toString());
+
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 if (newState == BluetoothGatt.STATE_CONNECTED) {
                     mBluetoothDevices.add(device);
+                    sendEvent("deviceConnected", event);
                 } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                     mBluetoothDevices.remove(device);
+                    sendEvent("deviceDisconnected", event);
                 }
             } else {
                 mBluetoothDevices.remove(device);
+                sendEvent("deviceDisconnected", event);
             }
         }
 
         @Override
         public void onCharacteristicReadRequest(BluetoothDevice device, int requestId, int offset,
                                                 BluetoothGattCharacteristic characteristic) {
-            super.onCharacteristicReadRequest(device, requestId, offset, characteristic);
+            // Log.d(LOG_TAG, "RNBLEModule - onCharacteristicReadRequest");
+
             if (offset != 0) {
                 mGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset,
             /* value (optional) */ null);
@@ -132,41 +145,63 @@ public class RNBLEModule extends ReactContextBaseJavaModule{
         }
 
         @Override
-        public void onNotificationSent(BluetoothDevice device, int status) {
-            super.onNotificationSent(device, status);
-        }
-
-        
         public void onCharacteristicWriteRequest(BluetoothDevice device, int requestId,
                                                  BluetoothGattCharacteristic characteristic, boolean preparedWrite, boolean responseNeeded,
-                                                 int offset, byte[] value, Promise promise) {
-            super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite,
-                    responseNeeded, offset, value);
-                    characteristic.setValue(value);
-            WritableMap map = Arguments.createMap();
+                                                 int offset, byte[] value) {
+            
+            // Log.d(LOG_TAG, "RNBLEModule - onCharacteristicWriteRequest id=" + requestId + " offset=" + offset + " data=" + Arrays.toString(value));
+
+            // characteristic.setValue(value);
+
+            WritableMap event = Arguments.createMap();
             WritableArray data = Arguments.createArray();
-            for (byte b : value){
-                data.pushInt((int)b);
+            for (byte b : value) {
+              data.pushInt((int)b);
             }
-            map.putArray("data",data);
-            map.putString("device",device.toString());
+            event.putString("characteristic", characteristic.getUuid().toString());
+            event.putString("device", device.toString());
+            event.putInt("requestId", requestId);
+            event.putArray("data", data);
+
+            sendEvent("characteristicWriteRequested", event);
+
             if (responseNeeded) {
-                mGattServer.sendResponse(device, requestId, 1,
-            /* No need to respond with an offset */ 0,
-            /* No need to respond with a value */ value);
+                mGattServer.sendResponse(
+                    device,
+                    requestId,
+                    BluetoothGatt.GATT_SUCCESS,
+                    offset,
+                    value
+                );
             }
-            promise.resolve(map);
         }
 
+        @Override
+        public void onDescriptorReadRequest(BluetoothDevice device, 
+                                            int requestId, 
+                                            int offset, 
+                                            BluetoothGattDescriptor descriptor) {
+            mGattServer.sendResponse(
+                device,
+                requestId,
+                BluetoothGatt.GATT_SUCCESS,
+                offset,
+                new byte[1]
+            );
+        }
 
+        @Override
+        public void onNotificationSent(BluetoothDevice device, int status) {
+            Log.d(LOG_TAG, "RNBLEModule - onNotificationSent " + status);
+        }
     };
 
     @ReactMethod
-    public void start(final Promise promise){
+    public void start(final Promise promise) {
         mBluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         mBluetoothAdapter = mBluetoothManager.getAdapter();
         // Ensures Bluetooth is available on the device and it is enabled. If not,
-// displays a dialog requesting user permission to enable Bluetooth.
+        // displays a dialog requesting user permission to enable Bluetooth.
 
         mBluetoothDevices = new HashSet<>();
         mGattServer = mBluetoothManager.openGattServer(reactContext, mGattServerCallback);
@@ -175,14 +210,14 @@ public class RNBLEModule extends ReactContextBaseJavaModule{
         }
         advertiser = mBluetoothAdapter.getBluetoothLeAdvertiser();
         AdvertiseSettings settings = new AdvertiseSettings.Builder()
-                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-                .setConnectable(true)
-                .build();
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setConnectable(true)
+            .build();
 
 
         AdvertiseData.Builder dataBuilder = new AdvertiseData.Builder()
-                .setIncludeDeviceName(true);
+            .setIncludeDeviceName(false);
         for (BluetoothGattService service : this.servicesMap.values()) {
             dataBuilder.addServiceUuid(new ParcelUuid(service.getUuid()));
         }
@@ -191,43 +226,39 @@ public class RNBLEModule extends ReactContextBaseJavaModule{
         advertisingCallback = new AdvertiseCallback() {
             @Override
             public void onStartSuccess(AdvertiseSettings settingsInEffect) {
-                super.onStartSuccess(settingsInEffect);
                 advertising = true;
-                promise.resolve("Succes, Started Advertising");
-
+                Log.d(LOG_TAG, "RNBLEModule - Started advertising");
+                promise.resolve(true);
             }
 
             @Override
             public void onStartFailure(int errorCode) {
                 advertising = false;
                 Log.e("RNBLEModule", "Advertising onStartFailure: " + errorCode);
-                promise.reject("Advertising onStartFailure: " + errorCode);
-                super.onStartFailure(errorCode);
+                promise.reject(String.valueOf(errorCode));
             }
         };
 
         advertiser.startAdvertising(settings, data, advertisingCallback);
-
     }
+
     @ReactMethod
-    public void stop(){
+    public void stop() {
         if (mGattServer != null) {
             mGattServer.close();
         }
-        if (mBluetoothAdapter !=null && mBluetoothAdapter.isEnabled() && advertiser != null) {
+        if (mBluetoothAdapter != null && mBluetoothAdapter.isEnabled() && advertiser != null) {
             // If stopAdvertising() gets called before close() a null
             // pointer exception is raised.
             advertiser.stopAdvertising(advertisingCallback);
         }
     }
+
     @ReactMethod
-    public void sendNotificationToDevices(String serviceUUID,String charUUID,ReadableArray message) {
-        byte[] decoded = new byte[message.size()];
-        for (int i = 0; i < message.size(); i++) {
-            decoded[i] = new Integer(message.getInt(i)).byteValue();
-        }
+    public void sendNotificationToDevices(String serviceUUID, String charUUID, ReadableArray message) {
         BluetoothGattCharacteristic characteristic = servicesMap.get(serviceUUID).getCharacteristic(UUID.fromString(charUUID));
-        characteristic.setValue(decoded);
+        setCharacteristicValue(characteristic, message);
+
         boolean indicate = (characteristic.getProperties()
                 & BluetoothGattCharacteristic.PROPERTY_INDICATE)
                 == BluetoothGattCharacteristic.PROPERTY_INDICATE;
@@ -236,9 +267,58 @@ public class RNBLEModule extends ReactContextBaseJavaModule{
             mGattServer.notifyCharacteristicChanged(device, characteristic, indicate);
         }
     }
+
+    @ReactMethod
+    public void sendNotificationToDevice(String serviceUUID, String charUUID, String deviceId, ReadableArray message) {
+        BluetoothGattCharacteristic characteristic = servicesMap.get(serviceUUID).getCharacteristic(UUID.fromString(charUUID));
+        setCharacteristicValue(characteristic, message);
+
+        boolean indicate = (characteristic.getProperties()
+                & BluetoothGattCharacteristic.PROPERTY_INDICATE)
+                == BluetoothGattCharacteristic.PROPERTY_INDICATE;
+        for (BluetoothDevice device : mBluetoothDevices) {
+            if (device.toString() == deviceId) {
+                // true for indication (acknowledge) and false for notification (unacknowledge).
+                mGattServer.notifyCharacteristicChanged(device, characteristic, indicate);
+                break;
+            }
+        }
+    }
+
     @ReactMethod
     public void isAdvertising(Promise promise){
         promise.resolve(this.advertising);
     }
 
+    @ReactMethod
+    public void getState(Promise promise) {
+        String state = "off";
+
+        if (mBluetoothAdapter != null) {
+            switch (mBluetoothAdapter.getState()) {
+                case BluetoothAdapter.STATE_ON:
+                    state = "on";
+                    break;
+                case BluetoothAdapter.STATE_OFF:
+                    state = "off";
+            }
+        }
+
+        promise.resolve(state);
+    }
+
+    private void setCharacteristicValue(BluetoothGattCharacteristic characteristic, ReadableArray value) {
+        byte[] decoded = new byte[value.size()];
+        for (int i = 0; i < value.size(); i++) {
+            decoded[i] = new Integer(value.getInt(i)).byteValue();
+        }
+
+        characteristic.setValue(decoded);
+    }
+
+    private void sendEvent(String eventName, @Nullable WritableMap params) {
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+            .emit(eventName, params);
+   }
 }
