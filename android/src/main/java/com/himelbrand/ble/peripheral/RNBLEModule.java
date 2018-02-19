@@ -151,7 +151,7 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
             
             // Log.d(LOG_TAG, "RNBLEModule - onCharacteristicWriteRequest id=" + requestId + " offset=" + offset + " data=" + Arrays.toString(value));
 
-            // characteristic.setValue(value);
+            characteristic.setValue(value);
 
             WritableMap event = Arguments.createMap();
             WritableArray data = Arguments.createArray();
