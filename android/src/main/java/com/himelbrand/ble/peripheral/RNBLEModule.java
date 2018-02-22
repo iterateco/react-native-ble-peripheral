@@ -73,6 +73,8 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
     boolean advertising;
     private Context context;
 
+    private static final UUID CLIENT_CHARACTERISTIC_CONFIGURATION_UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB");
+
     public RNBLEModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
@@ -98,7 +100,20 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void addCharacteristicToService(String serviceUUID, String uuid, Integer permissions, Integer properties) {
         UUID CHAR_UUID = UUID.fromString(uuid);
+        boolean notify = (properties & BluetoothGattCharacteristic.PROPERTY_NOTIFY) == BluetoothGattCharacteristic.PROPERTY_NOTIFY;
+
         BluetoothGattCharacteristic tempChar = new BluetoothGattCharacteristic(CHAR_UUID, properties, permissions);
+
+        if (notify) {
+            BluetoothGattDescriptor descriptor = new BluetoothGattDescriptor(
+                CLIENT_CHARACTERISTIC_CONFIGURATION_UUID,
+                BluetoothGattDescriptor.PERMISSION_WRITE | BluetoothGattDescriptor.PERMISSION_READ
+            );
+            descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            tempChar.addDescriptor(descriptor);
+        }
+
+        
         this.servicesMap.get(serviceUUID).addCharacteristic(tempChar);
     }
 
@@ -186,8 +201,28 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
                 requestId,
                 BluetoothGatt.GATT_SUCCESS,
                 offset,
-                new byte[1]
+                descriptor.getValue()
             );
+        }
+
+        @Override
+        public void onDescriptorWriteRequest(BluetoothDevice device, 
+                                              int requestId,
+                                              BluetoothGattDescriptor descriptor,
+                                              boolean preparedWrite,
+                                              boolean responseNeeded,
+                                              int offset,
+                                              byte[] value) {
+
+            if (responseNeeded) {
+                mGattServer.sendResponse(
+                    device,
+                    requestId,
+                    BluetoothGatt.GATT_SUCCESS,
+                    offset,
+                    value
+                );
+            }
         }
 
         @Override
@@ -205,6 +240,8 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
 
         mBluetoothDevices = new HashSet<>();
         mGattServer = mBluetoothManager.openGattServer(reactContext, mGattServerCallback);
+        mGattServer.clearServices();
+
         for (BluetoothGattService service : this.servicesMap.values()) {
             mGattServer.addService(service);
         }
@@ -234,7 +271,7 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
             @Override
             public void onStartFailure(int errorCode) {
                 advertising = false;
-                Log.e("RNBLEModule", "Advertising onStartFailure: " + errorCode);
+                Log.e(LOG_TAG, "RNBLEModule - Advertising onStartFailure: " + errorCode);
                 promise.reject(String.valueOf(errorCode));
             }
         };
@@ -262,6 +299,7 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
         boolean indicate = (characteristic.getProperties()
                 & BluetoothGattCharacteristic.PROPERTY_INDICATE)
                 == BluetoothGattCharacteristic.PROPERTY_INDICATE;
+
         for (BluetoothDevice device : mBluetoothDevices) {
             // true for indication (acknowledge) and false for notification (unacknowledge).
             mGattServer.notifyCharacteristicChanged(device, characteristic, indicate);
@@ -276,8 +314,9 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
         boolean indicate = (characteristic.getProperties()
                 & BluetoothGattCharacteristic.PROPERTY_INDICATE)
                 == BluetoothGattCharacteristic.PROPERTY_INDICATE;
+
         for (BluetoothDevice device : mBluetoothDevices) {
-            if (device.toString() == deviceId) {
+            if (device.toString().equals(deviceId)) {
                 // true for indication (acknowledge) and false for notification (unacknowledge).
                 mGattServer.notifyCharacteristicChanged(device, characteristic, indicate);
                 break;
