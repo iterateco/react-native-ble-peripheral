@@ -240,7 +240,6 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
 
         mBluetoothDevices = new HashSet<>();
         mGattServer = mBluetoothManager.openGattServer(reactContext, mGattServerCallback);
-        mGattServer.clearServices();
 
         for (BluetoothGattService service : this.servicesMap.values()) {
             mGattServer.addService(service);
