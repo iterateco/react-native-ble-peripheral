@@ -37,7 +37,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-
 import android.content.Intent;
 import android.net.Uri;
 import android.widget.Toast;
@@ -48,11 +47,12 @@ import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableArray;
-import com.facebook.react.common.MapBuilder;
+import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.common.MapBuilder;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 /**
@@ -62,7 +62,6 @@ import com.facebook.react.modules.core.DeviceEventManagerModule;
 public class RNBLEModule extends ReactContextBaseJavaModule {
     private static final String LOG_TAG = "ReactNative";
 
-    ReactApplicationContext reactContext;
     HashMap<String, BluetoothGattService> servicesMap;
     HashSet<BluetoothDevice> mBluetoothDevices;
     BluetoothManager mBluetoothManager;
@@ -71,14 +70,11 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
     BluetoothLeAdvertiser advertiser;
     AdvertiseCallback advertisingCallback;
     boolean advertising;
-    private Context context;
 
     private static final UUID CLIENT_CHARACTERISTIC_CONFIGURATION_UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB");
 
     public RNBLEModule(ReactApplicationContext reactContext) {
         super(reactContext);
-        this.reactContext = reactContext;
-        this.context = reactContext;
         this.servicesMap = new HashMap<String, BluetoothGattService>();
         this.advertising = false;
     }
@@ -148,15 +144,22 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
         @Override
         public void onCharacteristicReadRequest(BluetoothDevice device, int requestId, int offset,
                                                 BluetoothGattCharacteristic characteristic) {
-            // Log.d(LOG_TAG, "RNBLEModule - onCharacteristicReadRequest");
+            Log.d(LOG_TAG, "RNBLEModule - onCharacteristicReadRequest uuid=" + characteristic.getUuid().toString() +
+                " device=" + device.toString() + " id=" + requestId + " offset=" + offset);
+
+            WritableMap event = Arguments.createMap();
+            event.putString("characteristic", characteristic.getUuid().toString());
+            event.putString("device", device.toString());
+            event.putInt("requestId", requestId);
+
+            sendEvent("characteristicReadRequested", event);
 
             if (offset != 0) {
-                mGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset,
-            /* value (optional) */ null);
+                mGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset, /* value (optional) */ null);
                 return;
             }
-            mGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS,
-                    offset, characteristic.getValue());
+
+            mGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, characteristic.getValue());
         }
 
         @Override
@@ -164,7 +167,9 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
                                                  BluetoothGattCharacteristic characteristic, boolean preparedWrite, boolean responseNeeded,
                                                  int offset, byte[] value) {
             
-            // Log.d(LOG_TAG, "RNBLEModule - onCharacteristicWriteRequest id=" + requestId + " offset=" + offset + " data=" + Arrays.toString(value));
+            Log.d(LOG_TAG, "RNBLEModule - onCharacteristicWriteRequest uuid=" + characteristic.getUuid().toString() +
+                " device=" + device.toString() + " id=" + requestId + " offset=" + offset + " data=" + Arrays.toString(value) +
+                " responseNeeded=" + responseNeeded);
 
             characteristic.setValue(value);
 
@@ -233,13 +238,13 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
 
     @ReactMethod
     public void start(final Promise promise) {
-        mBluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+        mBluetoothManager = (BluetoothManager) getReactApplicationContext().getSystemService(Context.BLUETOOTH_SERVICE);
         mBluetoothAdapter = mBluetoothManager.getAdapter();
         // Ensures Bluetooth is available on the device and it is enabled. If not,
         // displays a dialog requesting user permission to enable Bluetooth.
 
         mBluetoothDevices = new HashSet<>();
-        mGattServer = mBluetoothManager.openGattServer(reactContext, mGattServerCallback);
+        mGattServer = mBluetoothManager.openGattServer(getReactApplicationContext(), mGattServerCallback);
 
         for (BluetoothGattService service : this.servicesMap.values()) {
             mGattServer.addService(service);
@@ -283,6 +288,7 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
         if (mGattServer != null) {
             mGattServer.close();
         }
+
         if (mBluetoothAdapter != null && mBluetoothAdapter.isEnabled() && advertiser != null) {
             // If stopAdvertising() gets called before close() a null
             // pointer exception is raised.
@@ -345,6 +351,12 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
         promise.resolve(state);
     }
 
+    @Override
+    public void onCatalystInstanceDestroy() {
+        super.onCatalystInstanceDestroy();
+        stop();
+    }
+
     private void setCharacteristicValue(BluetoothGattCharacteristic characteristic, ReadableArray value) {
         byte[] decoded = new byte[value.size()];
         for (int i = 0; i < value.size(); i++) {
@@ -355,7 +367,7 @@ public class RNBLEModule extends ReactContextBaseJavaModule {
     }
 
     private void sendEvent(String eventName, @Nullable WritableMap params) {
-        reactContext
+        getReactApplicationContext()
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
             .emit(eventName, params);
    }
